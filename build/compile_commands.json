@@ -1,0 +1,8 @@
+[
+{
+  "directory": "D:/FluidSimulatorHW/build",
+  "command": "g++  @CMakeFiles/TEST.dir/includes_CXX.rsp -g -std=gnu++20 -o CMakeFiles\\TEST.dir\\main.cpp.obj -c D:\\FluidSimulatorHW\\main.cpp",
+  "file": "D:/FluidSimulatorHW/main.cpp",
+  "output": "CMakeFiles/TEST.dir/main.cpp.obj"
+}
+]

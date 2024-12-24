@@ -1,0 +1,10 @@
+^D:\FLUIDSIMULATORHW\BUILD\CMAKEFILES\84D6CFC9CB46AE509ABF2BCAC4388C98\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/FluidSimulatorHW -BD:/FluidSimulatorHW/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/FluidSimulatorHW/build/Simulator.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
