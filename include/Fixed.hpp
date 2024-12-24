@@ -11,6 +11,7 @@ struct Fixed {
     static constexpr size_t N_value = N;
     static constexpr size_t K_value = K;
     static constexpr bool is_fast   = Fast;
+
     private:
 
     using value_type = std::conditional_t<
@@ -57,6 +58,8 @@ struct Fixed {
     constexpr Fixed(int v) : v(static_cast<value_type>(v) << K_value) {}
     constexpr Fixed(float f) : v(static_cast<value_type>(f * (1 << K_value))) {}
     constexpr Fixed(double f) : v(static_cast<value_type>(f * (1 << K_value))) {}
+    template<size_t N1, size_t K1, bool Fast1>
+    constexpr Fixed(const Fixed<N1, K1, Fast1>& other) : Fixed(double(other)) {}
     constexpr Fixed() : v(0) {}
 
     static constexpr Fixed from_raw(value_type x) {
@@ -64,72 +67,157 @@ struct Fixed {
         ret.v = x;
         return ret;
     }
-    auto operator<=>(const Fixed&) const = default;
-    bool operator==(const Fixed&) const  = default;
 
     inline value_type get_value() const {
         return v;
     }
+
+    constexpr Fixed operator+(const Fixed& other) const {
+        return Fixed::from_raw(v + other.v);
+    }
+
+    constexpr Fixed& operator+=(const Fixed& other) {
+        v += other.v;
+        return *this;
+    }
+
+    constexpr Fixed operator-(const Fixed& other) const {
+        return Fixed::from_raw(v - other.v);
+    }
+
+    constexpr Fixed& operator-=(const Fixed& other) {
+        v -= other.v;
+        return *this;
+    }
+
+    constexpr Fixed operator*(const Fixed& other) const {
+        return Fixed::from_raw((static_cast<double>(v) * static_cast<double>(other.v)) / (1 << K_value));
+    }
+
+    constexpr Fixed& operator*=(const Fixed& other) {
+        v = (static_cast<double>(v) * static_cast<double>(other.v)) / (1 << K_value);
+        return *this;
+    }
+
+    constexpr Fixed operator/(const Fixed& other) const {
+        return Fixed::from_raw((static_cast<double>(v) / static_cast<double>(other.v)) * (1 << K_value));
+    }
+
+    constexpr Fixed& operator/=(const Fixed& other) {
+        v = (static_cast<double>(v) / static_cast<double>(other.v)) * (1 << K_value);
+        return *this;
+    }
+
+    explicit operator int() const {
+        return static_cast<int>(v >> K_value);
+    }
+
+    explicit operator float() const {
+        return static_cast<float>(v) / (1 << K_value);
+    }
+
+    explicit operator double() const {
+        return static_cast<double>(v) / (1 << K_value);
+    }
+
+    template <size_t OtherN, size_t OtherK, bool OtherFast>
+    bool operator==(const Fixed<OtherN, OtherK, OtherFast>& other) const {
+        return static_cast<double>(v) / (1 << K_value) == static_cast<double>(other.get_value()) / (1 << OtherK);
+    }
+
+    template <size_t OtherN, size_t OtherK, bool OtherFast>
+    bool operator!=(const Fixed<OtherN, OtherK, OtherFast>& other) const {
+        return !(*this == other);
+    }
+
+    template <size_t OtherN, size_t OtherK, bool OtherFast>
+    bool operator<(const Fixed<OtherN, OtherK, OtherFast>& other) const {
+        return static_cast<double>(v) / (1 << K_value) < static_cast<double>(other.get_value()) / (1 << OtherK);
+    }
+
+    template <size_t OtherN, size_t OtherK, bool OtherFast>
+    bool operator<=(const Fixed<OtherN, OtherK, OtherFast>& other) const {
+        return static_cast<double>(v) / (1 << K_value) <= static_cast<double>(other.get_value()) / (1 << OtherK);
+    }
+
+    template <size_t OtherN, size_t OtherK, bool OtherFast>
+    bool operator>(const Fixed<OtherN, OtherK, OtherFast>& other) const {
+        return static_cast<double>(v) / (1 << K_value) > static_cast<double>(other.get_value()) / (1 << OtherK);
+    }
+
+    template <size_t OtherN, size_t OtherK, bool OtherFast>
+    bool operator>=(const Fixed<OtherN, OtherK, OtherFast>& other) const {
+        return static_cast<double>(v) / (1 << K_value) >= static_cast<double>(other.get_value()) / (1 << OtherK);
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    bool operator==(T other) const {
+        return T(*this) == other;
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    bool operator>=(T other) const {
+        return T(*this) >= other;
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    bool operator<=(T other) const {
+        return T(*this) <= other;
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    bool operator>(T other) const {
+        return T(*this) > other;
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    bool operator<(T other) const {
+        return T(*this) < other;
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    friend bool operator<= (T scalar, const Fixed& fixed) {
+        return (scalar <= T(fixed));
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    friend Fixed operator+(T scalar, const Fixed& fixed) {
+        return fixed + scalar;
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    friend Fixed operator-(T scalar, const Fixed& fixed) {
+        return Fixed::from_raw(static_cast<Fixed::value_type>(scalar << Fixed::K_value) - fixed.get_value());
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    friend Fixed operator*(T scalar, const Fixed& fixed) {
+        return fixed * scalar;
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    friend Fixed operator/(T scalar, const Fixed& fixed) {
+        return Fixed::from_raw(static_cast<Fixed::value_type>(scalar << Fixed::K_value) / fixed.get_value());
+    }
+
+    template<typename T>
+    requires(std::same_as<T, int> || std::same_as<T, float> || std::same_as<T, double>)
+    friend float operator-(T scalar, const Fixed& fixed) {
+        return T(fixed) - scalar;
+    }
 };
 
-
-template <size_t N, size_t K>
+template <size_t N, size_t K, bool Fast>
 using FastFixed = Fixed<N, K, true>;
-
-template<size_t N, size_t K>
-Fixed<N, K> operator+(Fixed<N, K>& a, Fixed<N, K>& b) {
-    return Fixed<N, K>::from_raw(a.get_value() + b.get_value());
-}
-
-template<size_t N, size_t K>
-Fixed<N, K> operator-(Fixed<N, K>& a, Fixed<N, K>& b) {
-    return Fixed<N, K>::from_raw(a.get_value() - b.get_value());
-}
-
-template<size_t N, size_t K>
-Fixed<N, K> operator*(Fixed<N, K>& a, Fixed<N, K>& b) {
-    return Fixed<N, K>::from_raw(a.get_value() * b.get_value());
-}
-
-template<size_t N, size_t K>
-Fixed<N, K> operator/(Fixed<N, K>& a, Fixed<N, K>& b) {
-    return Fixed<N, K>::from_raw(a.get_value() / b.get_value());
-}
-
-template<class A, class B>
-struct NewSize;
-
-template<size_t N1, size_t K1, size_t N2, size_t K2>
-struct NewSize<Fixed<N1, K1>, Fixed<N2, K2>> {
-    using value_type = std::conditional_t<
-        (N1 > N2) || (N1 == N2 && K1 <= K2),
-        Fixed<N1, K1>,
-        Fixed<N2, K2>
-    >;
-};
-
-template<size_t N1, size_t K1, size_t N2, size_t K2>
-auto operator+(Fixed<N1, K1>& a, Fixed<N2, K2>& b) {
-    using type = typename NewSize<Fixed<N1, K1>, Fixed<N2, K2>>::value_type;
-    return type(a) + type(b);
-}
-
-template<size_t N1, size_t K1, size_t N2, size_t K2>
-auto operator-(Fixed<N1, K1>& a, Fixed<N2, K2>& b) {
-    using type = typename NewSize<Fixed<N1, K1>, Fixed<N2, K2>>::value_type;
-    return type(a) - type(b);
-}
-
-template<size_t N1, size_t K1, size_t N2, size_t K2>
-auto operator*(Fixed<N1, K1>& a, Fixed<N2, K2>& b) {
-    using type = typename NewSize<Fixed<N1, K1>, Fixed<N2, K2>>::value_type;
-    return type(a) * type(b);
-}
-
-template<size_t N1, size_t K1, size_t N2, size_t K2>
-auto operator/(Fixed<N1, K1>& a, Fixed<N2, K2>& b) {
-    using type = typename NewSize<Fixed<N1, K1>, Fixed<N2, K2>>::value_type;
-    return type(a) / type(b);
-}
 
 #endif // FixedHEADER

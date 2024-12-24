@@ -15,6 +15,7 @@
 #include <string_view>
 #include <type_traits>
 #include <vector>
+#include <random>
 
 #include <Fixed.hpp>
 
@@ -41,10 +42,12 @@
 #define FLOAT float
 #define DOUBLE double
 #define FIXED(N, K) Fixed<N, K>
-#define FAST_FIXED(N, K) FastFixed<N, K>
+#define FAST_FIXED(N, K) Fixed<N, K, true>
+
+#define AmountOfTicks 500
 
 struct FieldSize {
-    constexpr FieldSize(const size_t n, const size_t m): rows(n), columns(m) {}
+    constexpr FieldSize(size_t n, size_t m): rows(n), columns(m) {}
     size_t rows{};
     size_t columns{};
 };
@@ -182,6 +185,278 @@ class Simulation {
         return field.front().size();
     }
 
+    std::tuple<VelocityElementType, bool, std::pair<int, int>> propagate_flow(int x, int y, VelocityElementType lim) {
+        last_use[x][y] = UT - 1;
+        VelocityElementType ret = 0;
+        for (auto [dx, dy] : deltas) {
+            int nx = x + dx, ny = y + dy;
+            if (field[nx][ny] != '#' && last_use[nx][ny] < UT) {
+                auto cap = velocity.get(x, y, dx, dy);
+                auto flow = velocity_flow.get(x, y, dx, dy);
+                if (flow == cap) {
+                    continue;
+                }
+                // assert(v >= velocity_flow.get(x, y, dx, dy));
+                auto vp = std::min(lim, VelocityElementType(cap) - VelocityElementType(flow));
+                if (last_use[nx][ny] == UT - 1) {
+                    velocity_flow.add(x, y, dx, dy, VelocityFlowElementType(vp));
+                    last_use[x][y] = UT;
+                    // cerr << x << " " << y << " -> " << nx << " " << ny << " " << vp << " / " << lim << "\n";
+                    return {vp, 1, {nx, ny}};
+                }
+                auto [t, prop, end] = propagate_flow(nx, ny, vp);
+                ret += t;
+                if (prop) {
+                    velocity_flow.add(x, y, dx, dy, VelocityFlowElementType(t));
+                    last_use[x][y] = UT;
+                    // cerr << x << " " << y << " -> " << nx << " " << ny << " " << t << " / " << lim << "\n";
+                    return {t, prop && end != std::pair<int, int>{x, y}, end};
+                }
+            }
+        }
+        last_use[x][y] = UT;
+        return {ret, 0, {0, 0}};
+    }
+
+    VelocityElementType random01() {
+        return VelocityElementType(static_cast<double>(rnd() & ((1 << 16) - 1)) / (1 << 16));
+    }
+
+    void propagate_stop(int x, int y, bool force = false) {
+        if (!force) {
+            bool stop = true;
+            for (auto [dx, dy] : deltas) {
+                int nx = x + dx, ny = y + dy;
+                if (field[nx][ny] != '#' && last_use[nx][ny] < UT - 1 && velocity.get(x, y, dx, dy) > 0) {
+                    stop = false;
+                    break;
+                }
+            }
+            if (!stop) {
+                return;
+            }
+        }
+        last_use[x][y] = UT;
+        for (auto [dx, dy] : deltas) {
+            int nx = x + dx, ny = y + dy;
+            if (field[nx][ny] == '#' || last_use[nx][ny] == UT || velocity.get(x, y, dx, dy) > 0) {
+                continue;
+            }
+            propagate_stop(nx, ny);
+        }
+    }
+
+    VelocityElementType move_prob(int x, int y) {
+        VelocityElementType sum = 0;
+        for (size_t i = 0; i < deltas.size(); ++i) {
+            auto [dx, dy] = deltas[i];
+            int nx = x + dx, ny = y + dy;
+            if (field[nx][ny] == '#' || last_use[nx][ny] == UT) {
+                continue;
+            }
+            auto v = velocity.get(x, y, dx, dy);
+            if (v < 0) {
+                continue;
+            }
+            sum += v;
+        }
+        return sum;
+    }
+
+    struct ParticleParams {
+        char type;
+        PElementType cur_p;
+        std::array<VelocityElementType, deltas.size()> v;
+
+        void swap_with(Simulation* simulation, int x, int y) {
+            std::swap(simulation->field[x][y], type);
+            std::swap(simulation->p[x][y], cur_p);
+            std::swap(simulation->velocity.vec[x][y], v);
+        }
+    };
+
+    bool propagate_move(int x, int y, bool is_first) {
+        last_use[x][y] = UT - is_first;
+        bool ret = false;
+        int nx = -1, ny = -1;
+        do {
+            std::array<VelocityElementType, deltas.size()> tres;
+            VelocityElementType sum = 0;
+            for (size_t i = 0; i < deltas.size(); ++i) {
+                auto [dx, dy] = deltas[i];
+                int nx = x + dx, ny = y + dy;
+                if (field[nx][ny] == '#' || last_use[nx][ny] == UT) {
+                    tres[i] = sum;
+                    continue;
+                }
+                auto v = velocity.get(x, y, dx, dy);
+                if (v < 0) {
+                    tres[i] = sum;
+                    continue;
+                }
+                sum += v;
+                tres[i] = sum;
+            }
+
+            if (sum == 0) {
+                break;
+            }
+
+            VelocityElementType p = random01() * sum;
+            size_t d = std::ranges::upper_bound(tres, p) - tres.begin();
+
+            auto [dx, dy] = deltas[d];
+            nx = x + dx;
+            ny = y + dy;
+            assert(velocity.get(x, y, dx, dy) > 0 && field[nx][ny] != '#' && last_use[nx][ny] < UT);
+
+            ret = (last_use[nx][ny] == UT - 1 || propagate_move(nx, ny, false));
+        } while (!ret);
+
+        last_use[x][y] = UT;
+        for (size_t i = 0; i < deltas.size(); ++i) {
+            auto [dx, dy] = deltas[i];
+            int nx = x + dx, ny = y + dy;
+            if (field[nx][ny] != '#' && last_use[nx][ny] < UT - 1 && velocity.get(x, y, dx, dy) < 0) {
+                propagate_stop(nx, ny);
+            }
+        }
+        if (ret) {
+            if (!is_first) {
+                ParticleParams pp{};
+                pp.swap_with(this, x, y);
+                pp.swap_with(this, nx, ny);
+                pp.swap_with(this, x, y);
+            }
+        }
+        return ret;
+    }
+
+    void run_simulation() {
+        rho[' '] = 0.01;
+        rho['.'] = 1000;
+        PElementType g = 0.1;
+
+        for (size_t x = 0; x < get_n(); ++x) {
+            for (size_t y = 0; y < get_m(); ++y) {
+                if (field[x][y] == '#')
+                    continue;
+                for (auto [dx, dy] : deltas) {
+                    dirs[x][y] += (field[x + dx][y + dy] != '#');
+                }
+            }
+        }
+
+        for (size_t i = 0; i < AmountOfTicks; ++i) {
+        
+            PElementType total_delta_p = 0;
+            // Apply external forces
+            for (size_t x = 0; x < get_n(); ++x) {
+                for (size_t y = 0; y < get_m(); ++y) {
+                    if (field[x][y] == '#')
+                        continue;
+                    if (field[x + 1][y] != '#')
+                        velocity.add(x, y, 1, 0, VelocityElementType(g));
+                }
+            }
+
+            // Apply forces from p
+            old_p = p;
+            for (size_t x = 0; x < get_n(); ++x) {
+                for (size_t y = 0; y < get_m(); ++y) {
+                    if (field[x][y] == '#')
+                        continue;
+                    for (auto [dx, dy] : deltas) {
+                        int nx = x + dx, ny = y + dy;
+                        if (field[nx][ny] != '#' && old_p[nx][ny] < old_p[x][y]) {
+                            auto delta_p = old_p[x][y] - old_p[nx][ny];
+                            auto force = delta_p;
+                            auto &contr = velocity.get(nx, ny, -dx, -dy);
+                            if (PElementType(contr) * rho[static_cast<int>(field[nx][ny])] >= force) {
+                                contr -= VelocityElementType(force / rho[(int) field[nx][ny]]);
+                                continue;
+                            }
+                            force -= PElementType(contr) * rho[(int) field[nx][ny]];
+                            contr = 0;
+                            velocity.add(x, y, dx, dy, VelocityElementType(force / rho[(int) field[x][y]]));
+                            p[x][y] -= force / dirs[x][y];
+                            total_delta_p -= force / dirs[x][y];
+                        }
+                    }
+                }
+            }
+
+            // Make flow from velocities
+            velocity_flow.vec = {};
+            bool prop = false;
+            do {
+                UT += 2;
+                prop = 0;
+                for (size_t x = 0; x < get_n(); ++x) {
+                    for (size_t y = 0; y < get_m(); ++y) {
+                        if (field[x][y] != '#' && last_use[x][y] != UT) {
+                            auto [t, local_prop, _] = propagate_flow(x, y, 1);
+                            if (t > 0) {
+                                prop = 1;
+                            }
+                        }
+                    }
+                }
+            } while (prop);
+
+            // Recalculate p with kinetic energy
+            for (size_t x = 0; x < get_n(); ++x) {
+                for (size_t y = 0; y < get_m(); ++y) {
+                    if (field[x][y] == '#')
+                        continue;
+                    for (auto [dx, dy] : deltas) {
+                        auto old_v = velocity.get(x, y, dx, dy);
+                        auto new_v = velocity_flow.get(x, y, dx, dy);
+                        if (old_v > VelocityElementType(0)) {
+                            assert(new_v <= old_v);
+                            velocity.get(x, y, dx, dy) = VelocityElementType(new_v);
+                            auto force = PElementType((PElementType(old_v) - PElementType(new_v)) * rho[static_cast<int>(field[x][y])]);
+                            if (field[x][y] == '.')
+                                force *= 0.8;
+                            if (field[x + dx][y + dy] == '#') {
+                                p[x][y] += force / dirs[x][y];
+                                total_delta_p += force / dirs[x][y];
+                            } else {
+                                p[x + dx][y + dy] += force / dirs[x + dx][y + dy];
+                                total_delta_p += force / dirs[x + dx][y + dy];
+                            }
+                        }
+                    }
+                }
+            }
+
+            UT += 2;
+            prop = false;
+            for (size_t x = 0; x < get_n(); ++x) {
+                for (size_t y = 0; y < get_m(); ++y) {
+                    if (field[x][y] != '#' && last_use[x][y] != UT) {
+                        if (random01() < move_prob(x, y)) {
+                            prop = true;
+                            propagate_move(x, y, true);
+                        } else {
+                            propagate_stop(x, y, true);
+                        }
+                    }
+                }
+            }
+
+            if (prop) {
+                std::cout << "Tick " << i << ":\n";
+                for (size_t x = 0; x < get_n(); ++x) {
+                    for (size_t y = 0; y < get_m(); ++y) {
+                        std::cout << field[x][y] << " ";
+                    }
+                    std::cout << std::endl;
+                }
+            }
+        }
+    }
+
     void start() {
         size_type n = get_n();
         size_type m = get_m();
@@ -200,33 +475,32 @@ class Simulation {
             }
             std::cout << '\n';
         }
-        std::cout << "p:\n";
-        for (auto& i : p) {
-            for (int cnt = 0 ; auto& j : i) {
-                std::cout << cnt << ' ';
-            }
-            std::cout << '\n';
-        }
         assert(field.size() == n);
         assert(p.size() == n);
-        assert(p_old.size() == n);
+        assert(old_p.size() == n);
         assert(velocity.vec.size() == n);
         assert(velocity_flow.vec.size() == n);
         assert(last_use.size() == n);
+        assert(dirs.size() == n);
 
         assert(field.front().size() == m);
         assert(p.front().size() == m);
-        assert(p_old.front().size() == m);
+        assert(old_p.front().size() == m);
         assert(velocity.vec.front().size() == m);
         assert(velocity_flow.vec.front().size() == m);
         assert(last_use.front().size() == m);
+        assert(dirs.front().size() == m);
 
         assert(field.back().size() == m);
         assert(p.back().size() == m);
-        assert(p_old.back().size() == m);
+        assert(old_p.back().size() == m);
         assert(velocity.vec.back().size() == m);
         assert(velocity_flow.vec.back().size() == m);
         assert(last_use.back().size() == m);
+        assert(dirs.back().size() == m);
+
+        run_simulation();
+
     }
 
     private:
@@ -234,18 +508,21 @@ class Simulation {
     requires(!UseStaticSize):
         field{field},
         p{rows, typename PMatrix::value_type(columns)},
-        p_old{rows, typename PMatrix::value_type(columns)},
+        old_p{rows, typename PMatrix::value_type(columns)},
         velocity{rows, typename VelocityVector::value_type(columns)},
         velocity_flow{rows, typename VelocityFlowVector::value_type(columns)},
-        last_use{rows, typename SimpleMatrix::value_type(columns)} {}
+        last_use{rows, typename SimpleMatrix::value_type(columns)},
+        dirs{rows, typename SimpleMatrix::value_type(columns)} {}
 
     Field field{};
     std::array<PElementType, 256> rho{};
     PMatrix p{};
-    PMatrix p_old{};
+    PMatrix old_p{};
     VelocityVector velocity{};
     VelocityFlowVector velocity_flow{};
     SimpleMatrix last_use{};
+    SimpleMatrix dirs{};
+    std::mt19937 rnd{1337};
     int UT = 0;
 };
 
