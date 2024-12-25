@@ -18,6 +18,7 @@
 #include <random>
 #include <chrono>
 #include <fstream>
+#include <omp.h>
 
 #include <Fixed.hpp>
 
@@ -148,28 +149,28 @@ class Simulation {
             size_t i;
 
             // originally was here
-            i = static_cast<size_t>(std::ranges::find(deltas, std::make_pair(dx, dy)) -
-                                                deltas.begin());
+            // i = static_cast<size_t>(std::ranges::find(deltas, std::make_pair(dx, dy)) -
+            //                                     deltas.begin());
 
-            assert(i < deltas.size());
+            // assert(i < deltas.size());
 
             // should be faster
-            // switch (2*dx + dy) {
-            //     case -2:
-            //         i = 0;
-            //         break;
-            //     case 2:
-            //         i = 1;
-            //         break;
-            //     case -1:
-            //         i = 2;
-            //         break;
-            //     case 1:
-            //         i = 3;
-            //         break;
-            //     default:
-            //         throw std::runtime_error("Invalid argument");
-            // }
+            switch (2*dx + dy) {
+                case -2:
+                    i = 0;
+                    break;
+                case 2:
+                    i = 1;
+                    break;
+                case -1:
+                    i = 2;
+                    break;
+                case 1:
+                    i = 3;
+                    break;
+                default:
+                    throw std::runtime_error("Invalid argument");
+            }
             return vec[x][y][i];
         }
 
@@ -220,7 +221,7 @@ class Simulation {
         return field.front().size();
     }
 
-    std::tuple<VelocityElementType, bool, std::pair<int, int>> propagate_flow(int x, int y, VelocityElementType lim) {
+    inline std::tuple<VelocityElementType, bool, std::pair<int, int>> propagate_flow(int x, int y, VelocityElementType lim) {
         last_use[x][y] = UT - 1;
         VelocityElementType ret = 0;
         for (auto [dx, dy] : deltas) {
@@ -253,14 +254,14 @@ class Simulation {
         return {ret, 0, {0, 0}};
     }
 
-    VelocityElementType random01() {
+    inline VelocityElementType random01() {
         if constexpr (requires{ {VelocityElementType::K_value == size_t {}} -> std::same_as<bool>; }) {
             return VelocityElementType(static_cast<double>(rnd() & ((1 << VelocityElementType::K_value) - 1)) / (1 << VelocityElementType::K_value));
         }
         return VelocityElementType(static_cast<double>(rnd() & ((1 << 16) - 1)) / (1 << 16));
     }
 
-    void propagate_stop(int x, int y, bool force = false) {
+    inline void propagate_stop(int x, int y, bool force = false) {
         if (!force) {
             bool stop = true;
             for (auto [dx, dy] : deltas) {
@@ -284,7 +285,7 @@ class Simulation {
         }
     }
 
-    VelocityElementType move_prob(int x, int y) {
+    inline VelocityElementType move_prob(int x, int y) {
         VelocityElementType sum = 0;
         for (size_t i = 0; i < deltas.size(); ++i) {
             auto [dx, dy] = deltas[i];
@@ -313,7 +314,7 @@ class Simulation {
         }
     };
 
-    bool propagate_move(int x, int y, bool is_first) {
+    inline bool propagate_move(int x, int y, bool is_first) {
         last_use[x][y] = UT - is_first;
         bool ret = false;
         int nx = -1, ny = -1;
@@ -344,15 +345,15 @@ class Simulation {
             size_t d;
 
             // originally used
-            d = std::ranges::upper_bound(tres, p) - tres.begin();
+            // d = std::ranges::upper_bound(tres, p) - tres.begin();
 
             // should be faster (well, it has same speed)
-            // for (int i = 0; i < 4; i++) {
-            //     if (tres[i] > p) {
-            //         d = i;
-            //         break;
-            //     }
-            // }
+            for (int i = 0; i < 4; i++) {
+                if (tres[i] > p) {
+                    d = i;
+                    break;
+                }
+            }
 
             
             auto [dx, dy] = deltas[d];
@@ -382,7 +383,7 @@ class Simulation {
         return ret;
     }
 
-    void run_simulation() {
+    inline void run_simulation() {
 
         if (g == double{}) {
             rho[' '] = 1;
@@ -395,6 +396,10 @@ class Simulation {
                   << "rho[' '] = " << double(rho[' ']) << std::endl
                   << "rho['.'] = " << double(rho['.']) << std::endl;
 
+        // each thread will be operating with its own x value so they can intersect
+        // in reading value from field[x + dx][y + dy] but field is not changing here
+        // so it will not be a problem
+        #pragma omp parallel for
         for (size_t x = 0; x < get_n(); ++x) {
             for (size_t y = 0; y < get_m(); ++y) {
                 if (field[x][y] == '#')
@@ -405,10 +410,16 @@ class Simulation {
             }
         }
 
+        // can't parallel ticks, they depend on each other
+        // they better run sequentially
         for (size_t i = 0; i < AmountOfTicks; ++i) {
         
             PElementType total_delta_p = 0;
+            // once again, intersection can be only in field[x + 1][y] but field
+            // doesn't change in this loop so it can be done in parallel
+            
             // Apply external forces
+            #pragma omp parallel for
             for (size_t x = 0; x < get_n(); ++x) {
                 for (size_t y = 0; y < get_m(); ++y) {
                     if (field[x][y] == '#')
@@ -419,8 +430,12 @@ class Simulation {
             }
 
             // Apply forces from p
-            old_p = p;
+            old_p = PMatrix(p);
+
+            // field doesn't change so doesn't old_p. They are the only intersection
+            #pragma omp parallel for
             for (size_t x = 0; x < get_n(); ++x) {
+                // #pragma omp parallel for
                 for (size_t y = 0; y < get_m(); ++y) {
                     if (field[x][y] == '#')
                         continue;
@@ -443,7 +458,6 @@ class Simulation {
                     }
                 }
             }
-
             // Make flow from velocities
             if constexpr (UseStaticSize) {
                 velocity_flow.vec = {};
@@ -528,7 +542,11 @@ class Simulation {
         size_type m = get_m();
         assert(n > 0);
         assert(m > 0);
-        std::cout << "Starting simulation with field size: (" << n << ", " << m << ")\n";
+        int aot;
+        #pragma omp parallel
+        aot = omp_get_num_threads();
+        #pragma omp single
+        std::cout << "Starting simulation with field size: (" << n << ", " << m << ") using " << aot << " thread(s)" << std::endl;
         if constexpr (UseStaticSize) {
             std::cout << "Using static size" << std::endl;
         } else {
@@ -792,6 +810,7 @@ struct SimulationParams {
     std::string_view p_type_name{};
     std::string_view velocity_type_name{};
     std::string_view velocity_flow_type_name{};
+    int amount_of_threads = 1;
 };
 
 template<class LoT, FieldSize... StaticSizes>
@@ -810,16 +829,15 @@ class Simulator<ListOfTypes<Types...>, StaticSizes...> {
     void start_with_field(const FieldContent& content) const {
         assert(!content.field.empty());
         assert(!content.field.front().empty());
+
+        // Now amount of threads is limited till the END OF TIME
+        omp_set_num_threads(params.amount_of_threads);
         TypesSelector<ListOfTypes<Types...>, ListOfTypes<>, StaticSizes...>::
         RecursivelySelectType(content, params.p_type_name, params.velocity_type_name, params.velocity_flow_type_name);
     }
 
     static FieldContent read_from_file(const std::string& file_name) {
         std::ifstream input(file_name);
-        if (!input.is_open()) {
-            std::string error_msg = "Was unable to open file " + file_name;
-            throw std::runtime_error(error_msg.c_str());
-        }
         FieldContent result;
         std::vector<char> tmp_row;
         std::string tmp_str;
