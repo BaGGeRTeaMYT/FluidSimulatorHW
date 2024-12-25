@@ -16,6 +16,7 @@
 #include <type_traits>
 #include <vector>
 #include <random>
+#include <chrono>
 
 #include <Fixed.hpp>
 
@@ -44,7 +45,7 @@
 #define FIXED(N, K) Fixed<N, K>
 #define FAST_FIXED(N, K) Fixed<N, K, true>
 
-#define AmountOfTicks 500
+#define AmountOfTicks 5000
 
 struct FieldSize {
     constexpr FieldSize(size_t n, size_t m): rows(n), columns(m) {}
@@ -141,9 +142,41 @@ class Simulation {
             requires(!UseStaticSize): vec{size, row} {}
 
         Type& get(int x, int y, int dx, int dy) {
-            size_t i = static_cast<size_t>(std::ranges::find(deltas, std::make_pair(dx, dy)) -
-                                                deltas.begin());
-            assert(i < deltas.size());
+            size_t i;
+
+            // originally was here
+            // i = static_cast<size_t>(std::ranges::find(deltas, std::make_pair(dx, dy)) -
+            //                                     deltas.begin());
+
+            // assert(i < deltas.size());
+
+            // should be faster
+            switch (2*dx + dy) {
+                case -2:
+                    i = 0;
+                    break;
+                case 2:
+                    i = 1;
+                    break;
+                case -1:
+                    i = 2;
+                    break;
+                case 1:
+                    i = 3;
+                    break;
+                default:
+                    throw std::runtime_error("Invalid argument");
+            }
+
+            // if (dx == -1) {
+            //     i = 0;
+            // } else if (dx == 1) {
+            //     i = 1;
+            // } else if (dy == -1) {
+            //     i = 2;
+            // } else {
+            //     i = 3;
+            // }
             return vec[x][y][i];
         }
 
@@ -197,7 +230,7 @@ class Simulation {
                     continue;
                 }
                 // assert(v >= velocity_flow.get(x, y, dx, dy));
-                auto vp = std::min(lim, VelocityElementType(cap) - VelocityElementType(flow));
+                auto vp = std::min(lim, cap - VelocityElementType(flow));
                 if (last_use[nx][ny] == UT - 1) {
                     velocity_flow.add(x, y, dx, dy, VelocityFlowElementType(vp));
                     last_use[x][y] = UT;
@@ -219,6 +252,9 @@ class Simulation {
     }
 
     VelocityElementType random01() {
+        if constexpr (requires{ {VelocityElementType::K_value == size_t {}} -> std::same_as<bool>; }) {
+            return VelocityElementType(static_cast<double>(rnd() & ((1 << VelocityElementType::K_value) - 1)) / (1 << VelocityElementType::K_value));
+        }
         return VelocityElementType(static_cast<double>(rnd() & ((1 << 16) - 1)) / (1 << 16));
     }
 
@@ -303,8 +339,20 @@ class Simulation {
             }
 
             VelocityElementType p = random01() * sum;
-            size_t d = std::ranges::upper_bound(tres, p) - tres.begin();
+            size_t d;
 
+            // originally used
+            d = std::ranges::upper_bound(tres, p) - tres.begin();
+
+            // should be faster (well, it has same speed)
+            // for (int i = 0; i < 4; i++) {
+            //     if (tres[i] > p) {
+            //         d = i;
+            //         break;
+            //     }
+            // }
+
+            
             auto [dx, dy] = deltas[d];
             nx = x + dx;
             ny = y + dy;
@@ -333,7 +381,8 @@ class Simulation {
     }
 
     void run_simulation() {
-        rho[' '] = 0.01;
+
+        rho[' '] = 1;
         rho['.'] = 1000;
         PElementType g = 0.1;
 
@@ -387,7 +436,15 @@ class Simulation {
             }
 
             // Make flow from velocities
-            velocity_flow.vec = {};
+            if constexpr (UseStaticSize) {
+                velocity_flow.vec = {};
+            } else {
+                for (auto& i : velocity_flow.vec) {
+                    for (auto& j : i) {
+                        std::fill(j.begin(), j.end(), 0);
+                    }
+                }
+            }
             bool prop = false;
             do {
                 UT += 2;
@@ -415,7 +472,7 @@ class Simulation {
                         if (old_v > VelocityElementType(0)) {
                             assert(new_v <= old_v);
                             velocity.get(x, y, dx, dy) = VelocityElementType(new_v);
-                            auto force = PElementType((PElementType(old_v) - PElementType(new_v)) * rho[static_cast<int>(field[x][y])]);
+                            auto force = PElementType((old_v - VelocityElementType(new_v)) * rho[static_cast<int>(field[x][y])]);
                             if (field[x][y] == '.')
                                 force *= 0.8;
                             if (field[x + dx][y + dy] == '#') {
@@ -445,15 +502,15 @@ class Simulation {
                 }
             }
 
-            if (prop) {
-                std::cout << "Tick " << i << ":\n";
-                for (size_t x = 0; x < get_n(); ++x) {
-                    for (size_t y = 0; y < get_m(); ++y) {
-                        std::cout << field[x][y] << " ";
-                    }
-                    std::cout << std::endl;
-                }
-            }
+            // if (prop) {
+            //     std::cout << "Tick " << i << ":\n";
+            //     for (size_t x = 0; x < get_n(); ++x) {
+            //         for (size_t y = 0; y < get_m(); ++y) {
+            //             std::cout << field[x][y] << " ";
+            //         }
+            //         std::cout << std::endl;
+            //     }
+            // }
         }
     }
 
@@ -499,8 +556,13 @@ class Simulation {
         assert(last_use.back().size() == m);
         assert(dirs.back().size() == m);
 
-        run_simulation();
 
+        auto start = std::chrono::high_resolution_clock::now();
+        run_simulation();
+        auto end = std::chrono::high_resolution_clock::now();
+
+        std::chrono::duration<double> elapsed = end - start;
+        std::cout << "Time taken: " << elapsed.count() << " seconds" << std::endl;
     }
 
     private:
@@ -523,6 +585,7 @@ class Simulation {
     SimpleMatrix last_use{};
     SimpleMatrix dirs{};
     std::mt19937 rnd{1337};
+    double g{};
     int UT = 0;
 };
 
@@ -602,6 +665,7 @@ class TypesSelector<ListOfTypes<AllowedTypes...>,
     static void RecursivelySelectType(const FieldContent& content,
                            std::string_view type_name,
                            Args... type_names) {
+        std::cout << "Dealing with " << type_name << " type. Types count: " << sizeof...(type_names) << std::endl; 
         if (CanUseDefaultFloatType && type_name == FloatTypeName) {
             ProcessOtherTypes<FLOAT, Args...>(content, type_names...);
             return;
@@ -737,6 +801,11 @@ class Simulator<ListOfTypes<Types...>, StaticSizes...> {
     public:
 
     static Simulator from_params(SimulationParams params) {
+        std::cout << "In from params function with params: {" << std::endl
+                  << params.p_type_name << "," << std::endl
+                  << params.velocity_type_name << "," << std::endl
+                  << params.velocity_flow_type_name << "," << std::endl
+                  << "}" << std::endl;
         return Simulator{std::move(params)};
     }
 
