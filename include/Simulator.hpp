@@ -17,6 +17,7 @@
 #include <vector>
 #include <random>
 #include <chrono>
+#include <fstream>
 
 #include <Fixed.hpp>
 
@@ -56,6 +57,8 @@ struct FieldSize {
 #define S(N, M) FieldSize(N, M)
 
 struct FieldContent {
+    std::array<double, 256> rho{};
+    double g{};
     std::vector<std::vector<char>> field;
 };
 
@@ -203,12 +206,21 @@ class Simulation {
                 field[i][j] = content.field[i][j];
             }
         }
+        g = content.g;
+        for (int i = 0; i < 256; i++) {
+            rho[i] = content.rho[i];
+        }
     }
 
     explicit constexpr Simulation(const FieldContent& content)
     requires(!UseStaticSize):
     Simulation(content.field, content.field.size(),
-               content.field.front().size()) {}
+               content.field.front().size()) {
+        g = content.g;
+        for (int i = 0; i < 256; i++) {
+            rho[i] = content.rho[i];
+        }
+    }
 
     [[nodiscard]] inline constexpr size_type get_n() const noexcept {
         return field.size();
@@ -382,9 +394,16 @@ class Simulation {
 
     void run_simulation() {
 
-        rho[' '] = 1;
-        rho['.'] = 1000;
-        PElementType g = 0.1;
+        if (g == double{}) {
+            rho[' '] = 1;
+            rho['.'] = 1000;
+            g = 0.1;
+        }
+
+        std::cout << "Will be simulating with params" << std::endl
+                  << "g = " << double(g) << std::endl
+                  << "rho[' '] = " << double(rho[' ']) << std::endl
+                  << "rho['.'] = " << double(rho['.']) << std::endl;
 
         for (size_t x = 0; x < get_n(); ++x) {
             for (size_t y = 0; y < get_m(); ++y) {
@@ -665,7 +684,6 @@ class TypesSelector<ListOfTypes<AllowedTypes...>,
     static void RecursivelySelectType(const FieldContent& content,
                            std::string_view type_name,
                            Args... type_names) {
-        std::cout << "Dealing with " << type_name << " type. Types count: " << sizeof...(type_names) << std::endl; 
         if (CanUseDefaultFloatType && type_name == FloatTypeName) {
             ProcessOtherTypes<FLOAT, Args...>(content, type_names...);
             return;
@@ -816,6 +834,39 @@ class Simulator<ListOfTypes<Types...>, StaticSizes...> {
         assert(!content.field.front().empty());
         TypesSelector<ListOfTypes<Types...>, ListOfTypes<>, StaticSizes...>::
         RecursivelySelectType(content, params.p_type_name, params.velocity_type_name, params.velocity_flow_type_name);
+    }
+
+    static FieldContent read_from_file(const std::string& file_name) {
+        std::ifstream input(file_name);
+        FieldContent result;
+        std::vector<char> tmp_row;
+        std::string tmp_str;
+        char tmp;
+
+        while (std::getline(input, tmp_str), tmp_str.size() > 0) {
+            for (int i = 0; i < tmp_str.size(); i++) {
+                char tmp = tmp_str[i];
+                if (tmp == '\'') {
+                    i++;
+                    tmp_row.push_back(tmp_str[i]);
+                    i++;
+                } else if (tmp == '}') {
+                    result.field.push_back(tmp_row);
+                    tmp_row.clear();
+                }
+            }
+        }
+        std::getline(input, tmp_str);
+        result.g = std::stod(tmp_str.substr(4));
+        std::getline(input, tmp_str);
+        result.rho[' '] = std::stod(tmp_str.substr(11));
+        std::getline(input, tmp_str);
+        result.rho['.'] = std::stod(tmp_str.substr(11));
+        return result;
+    }
+
+    void start_with_file(const std::string& file_name) const {
+        start_with_field(read_from_file(file_name));
     }
 
     private:

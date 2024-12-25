@@ -30,7 +30,8 @@ std::string remove_quotes(std::string&& str) {
 
 int main(int argc, char** argv) {
 
-    std::string_view p_type, v_type, v_flow_type, save_tick = "-1", input_file = "input.txt";
+    std::string_view p_type="FLOAT", v_type="FIXED(32, 8)", v_flow_type="FAST_FIXED(64, 12)",
+                     save_tick = "-1", input_file = "../input.txt";
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -60,6 +61,8 @@ int main(int argc, char** argv) {
 
     // this one is (8, 6) so it should be dynamic
     simulator.start_with_field(FieldContent{
+        .rho{},
+        .g{},
         .field =
             std::vector<std::vector<char>>{
                 {'#', '#', '#', '#', '#', '#'},
@@ -75,6 +78,8 @@ int main(int argc, char** argv) {
 
     // this one is (8, 5) so it should be static
     simulator.start_with_field(FieldContent{
+        .rho{},
+        .g{},
         .field =
             std::vector<std::vector<char>>{
                 {'#', '#', '#', '#', '#'},
@@ -87,4 +92,6 @@ int main(int argc, char** argv) {
                 {'#', '#', '#', '#', '#'},
             },
     });
+
+    simulator.start_with_file(std::string(input_file));
 }
